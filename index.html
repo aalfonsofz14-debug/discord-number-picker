@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Elige tu número</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101525;color:white;font-family:Arial,sans-serif;padding:25px 14px}
+main{max-width:850px;margin:auto}
+h1{font-size:38px;margin-bottom:5px}
+p{color:#aab4cc}
+button{cursor:pointer;border:0;border-radius:10px;padding:13px;font-weight:bold}
+.login{background:#5865f2;color:white;font-size:16px}
+.grid{display:grid;grid-template-columns:repeat(10,1fr);gap:7px;margin-top:25px}
+.num{background:#f3f4f6;color:#151b2b;min-height:58px;font-size:17px}
+.taken{background:#d33d52;color:white}
+.mine{outline:3px solid #f5d66b}
+.stats{display:flex;gap:20px;margin:20px 0}
+.stats b{font-size:24px}
+small{display:block;font-size:9px;overflow:hidden;text-overflow:ellipsis}
+#msg{margin:15px 0;color:#f5d66b}
+@media(max-width:550px){.grid{grid-template-columns:repeat(5,1fr)}}
+</style>
+</head>
+<body>
+<main>
+<h1>Elige tu número</h1>
+<p>Del 1 al 100 · Un número por jugador</p>
+<button class="login" id="login">Entrar con Discord</button>
+<button id="logout" hidden>Salir</button>
+<p id="user"></p>
+<div class="stats">
+<div><b id="used">0</b><br><small>Reservados</small></div>
+<div><b id="free">100</b><br><small>Disponibles</small></div>
+</div>
+<p id="msg">Conéctate con Discord para elegir.</p>
+<div class="grid" id="grid"></div>
+</main>
+<script>
+const SUPABASE_URL="https://xrplpjgjqfkvzoqkuhig.supabase.co/rest/v1/";
+const SUPABASE_KEY="sb_publishable_KG8kKvXQZOPXeTcjSg3HCw_xNVZKzh3";
+
+const db=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+let session=null, claims=[];
+
+async function refresh(){
+ const {data,error}=await db.from("number_claims")
+ .select("number,user_id,discord_name").order("number");
+ if(error){document.getElementById("msg").textContent=error.message;return;}
+ claims=data||[];
+ render();
+}
+
+function render(){
+ const grid=document.getElementById("grid");
+ grid.innerHTML="";
+ document.getElementById("used").textContent=claims.length;
+ document.getElementById("free").textContent=100-claims.length;
+ const mine=claims.find(c=>c.user_id===session?.user?.id);
+ for(let n=1;n<=100;n++){
+  const c=claims.find(x=>x.number===n);
+  const b=document.createElement("button");
+  b.className="num"+(c?" taken":"")+(c&&c.user_id===session?.user?.id?" mine":"");
+  b.innerHTML="<b>"+n+"</b>"+(c?"<small>"+escapeHtml(c.discord_name)+"</small>":"");
+  b.disabled=!session||!!c||!!mine;
+  b.onclick=()=>claim(n);
+  grid.appendChild(b);
+ }
+ document.getElementById("login").hidden=!!session;
+ document.getElementById("logout").hidden=!session;
+ document.getElementById("user").textContent=session?"Conectado: "+getName():"";
+}
+
+function escapeHtml(s){
+ return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function getName(){
+ const m=session.user.user_metadata||{};
+ return m.global_name||m.full_name||m.name||m.user_name||"Jugador";
+}
+
+async function claim(n){
+ if(!session)return;
+ document.getElementById("msg").textContent="Reservando...";
+ const {error}=await db.from("number_claims").insert({
+  number:n,user_id:session.user.id,discord_name:getName()
+ });
+ if(error)document.getElementById("msg").textContent=
+ "No se pudo reservar. Quizá alguien lo acaba de elegir o ya tienes uno.";
+ else document.getElementById("msg").textContent="¡Número "+n+" reservado!";
+ await refresh();
+}
+
+document.getElementById("login").onclick=async()=>{
+ const {error}=await db.auth.signInWithOAuth({
+  provider:"discord",
+  options:{redirectTo:location.origin+location.pathname}
+ });
+ if(error)document.getElementById("msg").textContent=error.message;
+};
+document.getElementById("logout").onclick=async()=>{
+ await db.auth.signOut();location.reload();
+};
+
+(async()=>{
+ const {data}=await db.auth.getSession();
+ session=data.session;
+ await refresh();
+ db.auth.onAuthStateChange((_e,s)=>{session=s;render();refresh();});
+ db.channel("reservas")
+ .on("postgres_changes",{event:"*",schema:"public",table:"number_claims"},refresh)
+ .subscribe();
+})();
+</script>
+</body>
+</html>
